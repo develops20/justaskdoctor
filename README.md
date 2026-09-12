@@ -47,6 +47,15 @@ npm run build
 5. JustAsk applies only that patch, repeats the original test, and exposes bookable times.
 6. **Reset demo** restores both this code defect and Sara’s missing schedule.
 
+### Artists JavaScript/Exa demo
+
+1. Click **Artists** in the main navigation. A controlled `TypeError` prevents navigation while the rest of the site remains usable.
+2. Open JustAsk and say: “Clicking Artists causes a JavaScript exception. Can you check and propose fixes?”
+3. JustAsk repeats the click, identifies the singular/plural route-key bug, and uses Exa to research trusted MDN and Next.js guidance.
+4. Choose either the recommended route-key correction or the defensive fallback, review the exact JavaScript diff, and approve it.
+5. JustAsk applies only the selected registered patch and repeats the original click.
+6. Open the verified `/artists` destination. Returning to the booking demo creates a fresh broken demo state.
+
 ## Configuration
 
 All supported values are documented in `.env.example`.
@@ -66,6 +75,7 @@ No permanent secret belongs in a `NEXT_PUBLIC_` variable.
 - `lib/context-adapter.ts` implements `JustAskHostAdapter`. The widget uses this interface rather than mutating salon state directly.
 - `lib/booking-tools.ts` implements slot generation, the registered customer test, deterministic diagnosis, and allowlisted schedule mutation.
 - `lib/code-tools.ts` implements the second registered code diagnosis, exact patch validation, and repeat customer test.
+- `lib/navigation-tools.ts` implements the Artists-link exception, two validated JavaScript patch candidates, approval, and route verification.
 - `app/api/live/session/route.ts` creates OpenAI Realtime ephemeral client secrets server-side.
 - `lib/use-justask-voice.ts` uses the official OpenAI Agents SDK browser WebRTC transport, local typed tools, and automatic interruption handling.
 - `app/api/research/route.ts` calls Exa server-side with a Cal.com domain allowlist and a short timeout.

@@ -105,10 +105,51 @@ summary:focus-visible {
   gap: 34px;
 }
 
-.site-header nav a {
+.site-header nav a,
+.site-header nav button {
+  background: transparent;
+  border: 0;
   color: var(--ink);
+  cursor: pointer;
   font-size: 13px;
+  padding: 0;
   text-decoration: none;
+}
+
+.navigation-error-banner {
+  align-items: center;
+  background: #3b2824;
+  color: #f6ded6;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto 1fr auto auto;
+  padding: 12px max(5vw, 24px);
+}
+
+.navigation-error-banner > span {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+}
+
+.navigation-error-banner strong {
+  font-size: 13px;
+}
+
+.navigation-error-banner code {
+  color: #dfb6aa;
+  font-size: 9px;
+}
+
+.navigation-error-banner button {
+  background: #f4e4de;
+  border: 0;
+  border-radius: 4px;
+  color: #492d27;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 9px 12px;
 }
 
 .owner-link {
@@ -987,6 +1028,49 @@ details summary {
   color: #94cea3;
 }
 
+.fix-candidates {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.fix-candidates > button {
+  align-items: center;
+  background: #1c201d;
+  border: 1px solid #373d39;
+  border-radius: 6px;
+  color: #d9dcd9;
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  padding: 9px;
+  text-align: left;
+}
+
+.fix-candidates > button.selected {
+  background: #233027;
+  border-color: #55705d;
+}
+
+.fix-candidates > button:disabled {
+  cursor: default;
+}
+
+.fix-candidates > button > span:last-child {
+  display: flex;
+  flex-direction: column;
+}
+
+.fix-candidates strong {
+  font-size: 10px;
+}
+
+.fix-candidates small {
+  color: #939b95;
+  font-size: 8px;
+  margin-top: 2px;
+}
+
 .diff-before,
 .diff-after {
   border-radius: 6px;
@@ -1265,6 +1349,19 @@ details summary {
     margin: 0;
   }
 
+  .navigation-error-banner {
+    grid-template-columns: auto 1fr;
+  }
+
+  .navigation-error-banner code {
+    display: none;
+  }
+
+  .navigation-error-banner button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
   .hero {
     grid-template-columns: 1fr;
     min-height: auto;
@@ -1310,6 +1407,16 @@ details summary {
     padding: 80px 28px;
   }
 
+  .artist-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .artists-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 20px;
+  }
+
   footer {
     align-items: flex-start;
     flex-direction: column;
@@ -1328,4 +1435,74 @@ details summary {
   .status-pill {
     max-width: 115px;
   }
+}
+
+.artists-page {
+  min-height: 100vh;
+}
+
+.artists-hero {
+  margin: auto;
+  max-width: 750px;
+  padding: 110px 25px 70px;
+  text-align: center;
+}
+
+.artists-hero h1 {
+  font-family: var(--font-serif), serif;
+  font-size: clamp(56px, 8vw, 94px);
+  font-weight: 400;
+  letter-spacing: -0.05em;
+  margin: 15px 0 22px;
+}
+
+.artists-hero > p:last-child {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.artist-grid {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: repeat(2, 1fr);
+  margin: auto;
+  max-width: 980px;
+  padding: 0 24px 110px;
+}
+
+.artist-profile img {
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+  width: 100%;
+}
+
+.artist-profile .eyebrow {
+  margin: 22px 0 8px;
+}
+
+.artist-profile h2 {
+  font-family: var(--font-serif), serif;
+  font-size: 34px;
+  font-weight: 400;
+  margin: 0;
+}
+
+.artist-profile > p:last-child {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.artists-footer {
+  align-items: center;
+  background: var(--cream);
+  display: flex;
+  justify-content: space-between;
+  padding: 60px max(8vw, 28px);
+}
+
+.artists-footer h2 {
+  font-family: var(--font-serif), serif;
+  font-size: clamp(30px, 4vw, 46px);
+  font-weight: 400;
+  margin: 10px 0 0;
 }

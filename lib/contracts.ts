@@ -61,6 +61,17 @@ export const CodePatchSchema = z.object({
   after: z.literal(180),
 });
 
+export const NavigationPatchSchema = z.object({
+  type: z.literal("FIX_ARTISTS_ROUTE"),
+  strategy: z.enum(["correct-route-key", "safe-fallback"]),
+  file: z.literal("components/salon/SalonExperience.tsx"),
+  before: z.literal("routes.artist.toLowerCase()"),
+  after: z.enum([
+    "routes.artists",
+    'routes.artist?.toLowerCase() ?? "/artists"',
+  ]),
+});
+
 export const ResearchSourceSchema = z.object({
   title: z.string(),
   url: z.url(),
@@ -90,6 +101,7 @@ export type WebsiteContext = z.infer<typeof WebsiteContextSchema>;
 export type BookingTestResult = z.infer<typeof BookingTestResultSchema>;
 export type AvailabilityChange = z.infer<typeof AvailabilityChangeSchema>;
 export type CodePatch = z.infer<typeof CodePatchSchema>;
+export type NavigationPatch = z.infer<typeof NavigationPatchSchema>;
 export type ResearchSource = z.infer<typeof ResearchSourceSchema>;
 export type DiagnosisResult = z.infer<typeof DiagnosisResultSchema>;
 export type Approval = z.infer<typeof ApprovalSchema>;

@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   BROKEN_SARA_CONFIGURATION,
   MAYA_CONFIGURATION,
@@ -33,11 +34,18 @@ import {
   runColorBookingTest,
   type CodeDiagnosis,
 } from "@/lib/code-tools";
+import {
+  applyRegisteredNavigationPatch,
+  diagnoseArtistsNavigation,
+  runArtistsNavigationTest,
+  type NavigationDiagnosis,
+} from "@/lib/navigation-tools";
 import type {
   AgentPhase,
   AvailabilityChange,
   BookingTestResult,
   CodePatch,
+  NavigationPatch,
   DiagnosisResult,
   DiagnosticEvent,
   ResearchSource,
@@ -58,6 +66,25 @@ const FALLBACK_SOURCES: ResearchSource[] = [
     extract:
       "When no slots appear, verify that the host has an active availability schedule.",
     domain: "cal.com",
+    isFallback: true,
+  },
+];
+
+const NAVIGATION_FALLBACK_SOURCES: ResearchSource[] = [
+  {
+    title: "TypeError: can’t access property — object is undefined",
+    url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Errors/Unexpected_type",
+    extract:
+      "A TypeError occurs when code accesses a property or method on an undefined value.",
+    domain: "developer.mozilla.org",
+    isFallback: true,
+  },
+  {
+    title: "Next.js Linking and Navigating",
+    url: "https://nextjs.org/docs/app/getting-started/linking-and-navigating",
+    extract:
+      "Next.js client navigation requires a valid route path passed to Link or the router.",
+    domain: "nextjs.org",
     isFallback: true,
   },
 ];
@@ -125,6 +152,7 @@ function formatSlot(slot: string) {
 }
 
 export function SalonExperience() {
+  const router = useRouter();
   const [selectedServiceId, setSelectedServiceId] = useState("haircut");
   const [selectedStaffId, setSelectedStaffId] = useState("sara");
   const [saraConfiguration, setSaraConfigurationState] =
@@ -155,8 +183,18 @@ export function SalonExperience() {
   const [codeDiagnosis, setCodeDiagnosis] = useState<CodeDiagnosis | null>(null);
   const [codePatch, setCodePatch] = useState<CodePatch | null>(null);
   const [codeApprovalId, setCodeApprovalId] = useState<string | null>(null);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const navigationErrorRef = useRef(navigationError);
+  const [artistsPatchApplied, setArtistsPatchAppliedState] = useState(false);
+  const artistsPatchAppliedRef = useRef(artistsPatchApplied);
+  const [navigationDiagnosis, setNavigationDiagnosis] =
+    useState<NavigationDiagnosis | null>(null);
+  const [navigationPatch, setNavigationPatch] =
+    useState<NavigationPatch | null>(null);
+  const [navigationApprovalId, setNavigationApprovalId] =
+    useState<string | null>(null);
   const [activeIncident, setActiveIncident] = useState<
-    "availability" | "code"
+    "availability" | "code" | "navigation"
   >("availability");
   const [approvalId, setApprovalId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -180,6 +218,11 @@ export function SalonExperience() {
     setMaxOnlineDurationState(duration);
   };
 
+  const updateArtistsPatchApplied = (applied: boolean) => {
+    artistsPatchAppliedRef.current = applied;
+    setArtistsPatchAppliedState(applied);
+  };
+
   /* The adapter callbacks read refs only when a host tool executes, never while rendering. */
   /* eslint-disable react-hooks/refs */
   const adapter = useMemo(
@@ -200,7 +243,9 @@ export function SalonExperience() {
           selectedServiceId: selectedServiceRef.current,
           selectedStaffId: selectedStaffRef.current,
           visibleMessage:
-            bookingIssueRef.current === "duration-limit"
+            navigationErrorRef.current
+              ? navigationErrorRef.current
+              : bookingIssueRef.current === "duration-limit"
               ? "This service cannot be booked online."
               : visibleSlotsRef.current?.length === 0
                 ? "No appointments are available with this stylist."
@@ -212,6 +257,30 @@ export function SalonExperience() {
     [],
   );
   /* eslint-enable react-hooks/refs */
+
+  const handleArtistsClick = () => {
+    const result = runArtistsNavigationTest(artistsPatchAppliedRef.current);
+    if (result.success && result.destination) {
+      router.push(result.destination);
+      return;
+    }
+
+    const message = `${result.errorName}: ${result.errorMessage}`;
+    navigationErrorRef.current = message;
+    setNavigationError(message);
+    setMessage(
+      "Clicking Artists causes a JavaScript exception. Can you check and propose fixes?",
+    );
+    updateEvents({
+      timestamp: new Date().toISOString(),
+      type: "javascript-exception",
+      operation: "navigateToArtists",
+      status: 500,
+      summary:
+        "TypeError: routes.artist is undefined while opening /artists",
+    });
+    console.warn("[Luma navigation] Captured demo TypeError:", result.errorMessage);
+  };
 
   const updateDemoMessage = (serviceId: string, staffId: string) => {
     setMessage(
@@ -277,27 +346,32 @@ export function SalonExperience() {
     setVisibleSlots(result.slots);
   };
 
-  const fetchResearch = async (): Promise<ResearchSource[]> => {
+  const fetchResearch = async (
+    topic: "booking-availability" | "javascript-navigation" =
+      "booking-availability",
+  ): Promise<ResearchSource[]> => {
+    const fallback =
+      topic === "javascript-navigation"
+        ? NAVIGATION_FALLBACK_SOURCES
+        : FALLBACK_SOURCES;
     try {
       const response = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: "official booking availability schedule no slots",
-        }),
+        body: JSON.stringify({ topic }),
       });
-      if (!response.ok) return FALLBACK_SOURCES;
+      if (!response.ok) return fallback;
       const payload = (await response.json()) as { sources?: ResearchSource[] };
-      return payload.sources?.length ? payload.sources : FALLBACK_SOURCES;
+      return payload.sources?.length ? payload.sources : fallback;
     } catch {
-      return FALLBACK_SOURCES;
+      return fallback;
     }
   };
 
   const investigate = async (utterance: string): Promise<string> => {
     const normalizedUtterance = utterance.toLowerCase();
     if (
-      !["book", "sara", "color", "maya"].some((term) =>
+      !["book", "sara", "color", "maya", "artist", "link", "javascript"].some((term) =>
         normalizedUtterance.includes(term),
       )
     ) {
@@ -313,14 +387,69 @@ export function SalonExperience() {
         selectedStaffRef.current === "maya") ||
       normalizedUtterance.includes("color") ||
       normalizedUtterance.includes("maya");
+    const isNavigationIncident =
+      navigationErrorRef.current !== null ||
+      normalizedUtterance.includes("artist") ||
+      normalizedUtterance.includes("javascript") ||
+      normalizedUtterance.includes("link");
 
     setError(null);
-    setActiveIncident(isCodeIncident ? "code" : "availability");
+    setActiveIncident(
+      isNavigationIncident
+        ? "navigation"
+        : isCodeIncident
+          ? "code"
+          : "availability",
+    );
     setTranscript((lines) => [...lines, `You: ${utterance}`]);
     setPhase("investigating");
     setIsSpeaking(false);
     try {
       await delay(500);
+
+      if (isNavigationIncident) {
+        setTestResult(null);
+        setDiagnosis(null);
+        setProposal(null);
+        setApprovalId(null);
+        setCodeDiagnosis(null);
+        setCodePatch(null);
+        setCodeApprovalId(null);
+
+        const result = runArtistsNavigationTest(
+          artistsPatchAppliedRef.current,
+        );
+        setPhase("researching");
+        const sources = await fetchResearch("javascript-navigation");
+        await delay(350);
+        const finding = diagnoseArtistsNavigation(result, sources);
+        setNavigationDiagnosis(finding);
+        setNavigationPatch(finding.candidates[0]);
+        setTranscript((lines) => [
+          ...lines,
+          "JustAsk: I reproduced the Artists link failure. The page uses the singular route key “artist”, but the route map defines “artists”.",
+          "JustAsk: I found trusted JavaScript and Next.js guidance and prepared two safe fixes for you to choose from.",
+        ]);
+        setPhase("diagnosis-ready");
+        setIsSpeaking(true);
+        return JSON.stringify({
+          customerTest:
+            "Clicking Artists stays on /book and throws a JavaScript TypeError",
+          finding: finding.summaryForOwner,
+          technicalCause: finding.technicalCause,
+          candidateFixes: finding.candidates.map((candidate) => ({
+            strategy: candidate.strategy,
+            replacement: candidate.after,
+          })),
+          researchSources: finding.sources.map((source) => ({
+            title: source.title,
+            url: source.url,
+          })),
+          mutationApplied: false,
+          nextStep:
+            "Ask the owner to choose a visual fix and explicitly approve it.",
+        });
+      }
 
       if (isCodeIncident) {
         selectedServiceRef.current = "color";
@@ -331,6 +460,9 @@ export function SalonExperience() {
         setDiagnosis(null);
         setProposal(null);
         setApprovalId(null);
+        setNavigationDiagnosis(null);
+        setNavigationPatch(null);
+        setNavigationApprovalId(null);
 
         const result = runColorBookingTest(maxOnlineDurationRef.current);
         setTestResult(result);
@@ -376,6 +508,9 @@ export function SalonExperience() {
       setCodeDiagnosis(null);
       setCodePatch(null);
       setCodeApprovalId(null);
+      setNavigationDiagnosis(null);
+      setNavigationPatch(null);
+      setNavigationApprovalId(null);
       const result = await adapter.runBookingTest({
         serviceId: "haircut",
         staffId: "sara",
@@ -432,6 +567,14 @@ export function SalonExperience() {
     setIsSpeaking(false);
     setCodePatch(patch);
     setCodeApprovalId(crypto.randomUUID());
+    setMessage("");
+    setPhase("waiting-for-approval");
+  };
+
+  const requestNavigationApproval = (patch: NavigationPatch) => {
+    setIsSpeaking(false);
+    setNavigationPatch(patch);
+    setNavigationApprovalId(crypto.randomUUID());
     setMessage("");
     setPhase("waiting-for-approval");
   };
@@ -544,9 +687,51 @@ export function SalonExperience() {
     }
   };
 
+  const approveNavigationPatch = async () => {
+    if (!navigationApprovalId || !navigationPatch) return;
+    setNavigationApprovalId(null);
+    setPhase("applying-change");
+    try {
+      await delay(400);
+      const applied = applyRegisteredNavigationPatch(
+        artistsPatchAppliedRef.current,
+        navigationPatch,
+      );
+      updateArtistsPatchApplied(applied);
+      navigationErrorRef.current = null;
+      setNavigationError(null);
+      updateEvents({
+        timestamp: new Date().toISOString(),
+        type: "registered-code-patch",
+        operation: "fixArtistsNavigation",
+        status: 200,
+        summary: `Applied approved Artists route patch using ${navigationPatch.strategy}`,
+      });
+      setPhase("verifying");
+      await delay(500);
+      const verified = runArtistsNavigationTest(applied);
+      if (!verified.success || verified.destination !== "/artists") {
+        throw new Error("The repeated Artists navigation test did not pass.");
+      }
+      setTranscript((lines) => [
+        ...lines,
+        "JustAsk: The selected JavaScript fix is live. I repeated the Artists click and it now resolves to the correct /artists page.",
+      ]);
+      setPhase("resolved");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The Artists navigation patch failed.",
+      );
+      setPhase("error");
+    }
+  };
+
   const resetDemo = () => {
     updateSaraConfiguration({ ...BROKEN_SARA_CONFIGURATION });
     updateMaxOnlineDuration(BROKEN_MAX_ONLINE_DURATION);
+    updateArtistsPatchApplied(false);
     eventsRef.current = [];
     setEvents([]);
     setVisibleSlots(null);
@@ -567,6 +752,11 @@ export function SalonExperience() {
     setCodeDiagnosis(null);
     setCodePatch(null);
     setCodeApprovalId(null);
+    navigationErrorRef.current = null;
+    setNavigationError(null);
+    setNavigationDiagnosis(null);
+    setNavigationPatch(null);
+    setNavigationApprovalId(null);
     setActiveIncident("availability");
     setError(null);
     selectService("haircut");
@@ -592,6 +782,7 @@ export function SalonExperience() {
         phase={phase}
         proposal={proposal}
         codePatch={codePatch}
+        navigationPatch={navigationPatch}
       />
       <header className="site-header">
         <a className="brand" href="#top" aria-label="Luma Salon home">
@@ -603,7 +794,7 @@ export function SalonExperience() {
         </a>
         <nav aria-label="Main navigation">
           <a href="#services">Services</a>
-          <a href="#artists">Artists</a>
+          <button onClick={handleArtistsClick}>Artists</button>
           <a href="#book">Book</a>
         </nav>
         <button
@@ -624,6 +815,29 @@ export function SalonExperience() {
           {ownerMode ? "Close Owner Mode" : "Owner Mode"}
         </button>
       </header>
+
+      {navigationError && (
+        <div className="navigation-error-banner" role="alert">
+          <CircleAlert size={20} />
+          <span>
+            <strong>We couldn’t open Artists</strong>
+            A JavaScript error stopped this link. Other booking features still
+            work.
+          </span>
+          <code>{navigationError}</code>
+          <button
+            onPointerEnter={() => void voice.preload()}
+            onClick={() => {
+              if (!ownerMode) {
+                toggleOwnerMode();
+                void voice.connect();
+              }
+            }}
+          >
+            Ask JustAsk
+          </button>
+        </div>
+      )}
 
       <section className="hero" id="top">
         <div className="hero-copy">
@@ -858,14 +1072,7 @@ export function SalonExperience() {
                   {voice.error && <small className="voice-error">{voice.error}</small>}
                   <button
                     className="demo-fallback-button"
-                    onClick={() =>
-                      void investigate(
-                        selectedServiceId === "color" &&
-                          selectedStaffId === "maya"
-                          ? "Customers say they can’t book Dimensional color with Maya. Can you check?"
-                          : "Customers say they can’t book Sara. Can you check?",
-                      )
-                    }
+                    onClick={() => void investigate(message)}
                   >
                     Run selected demo without microphone
                   </button>
@@ -879,11 +1086,15 @@ export function SalonExperience() {
                     <strong>{phaseLabels[phase]}</strong>
                     <p>
                       {phase === "investigating"
-                        ? activeIncident === "code"
-                          ? "Repeating the Dimensional color with Maya customer journey…"
-                          : "Repeating the Haircut with Sara customer journey…"
+                        ? activeIncident === "navigation"
+                          ? "Repeating the Artists menu click…"
+                          : activeIncident === "code"
+                            ? "Repeating the Dimensional color with Maya customer journey…"
+                            : "Repeating the Haircut with Sara customer journey…"
                         : phase === "researching"
-                          ? "Checking trusted availability guidance…"
+                          ? activeIncident === "navigation"
+                            ? "Exa is checking trusted JavaScript and Next.js guidance…"
+                            : "Checking trusted availability guidance…"
                           : "I heard you. Starting the check…"}
                     </p>
                   </div>
@@ -897,12 +1108,16 @@ export function SalonExperience() {
                     <strong>{phaseLabels[phase]}</strong>
                     <p>
                       {phase === "applying-change"
-                        ? activeIncident === "code"
-                          ? "Applying only the registered code patch you approved…"
-                          : "Applying only the schedule you approved…"
-                        : activeIncident === "code"
-                          ? "Repeating the original Dimensional color with Maya test…"
-                          : "Repeating the original Haircut with Sara test…"}
+                        ? activeIncident === "navigation"
+                          ? "Applying only the JavaScript patch you selected…"
+                          : activeIncident === "code"
+                            ? "Applying only the registered code patch you approved…"
+                            : "Applying only the schedule you approved…"
+                        : activeIncident === "navigation"
+                          ? "Repeating the original Artists click…"
+                          : activeIncident === "code"
+                            ? "Repeating the original Dimensional color with Maya test…"
+                            : "Repeating the original Haircut with Sara test…"}
                     </p>
                   </div>
                 </div>
@@ -1110,39 +1325,195 @@ export function SalonExperience() {
                 </div>
               )}
 
-              {phase === "resolved" && testResult && (
+              {navigationDiagnosis && navigationPatch && (
+                <>
+                  <div className="diagnosis-card code-diagnosis">
+                    <div className="finding-heading">
+                      <span><CircleAlert size={18} /></span>
+                      <div>
+                        <small>
+                          JavaScript issue · {navigationDiagnosis.confidence} confidence
+                        </small>
+                        <h3>The Artists link uses the wrong route key</h3>
+                      </div>
+                    </div>
+                    <p className="owner-summary">
+                      {navigationDiagnosis.summaryForOwner}
+                    </p>
+                    <details>
+                      <summary>
+                        Technical evidence <ChevronDown size={15} />
+                      </summary>
+                      <div className="evidence-list">
+                        {navigationDiagnosis.evidence.map((item) => (
+                          <div key={item.label}>
+                            <span>{item.label}</span>
+                            <code>{item.value}</code>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                    <div className="sources">
+                      <small>Exa research · trusted sources</small>
+                      {navigationDiagnosis.sources.map((source) => (
+                        <a
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          key={source.url}
+                        >
+                          <span>
+                            <strong>{source.title}</strong>
+                            <small>{source.domain}</small>
+                          </span>
+                          <ExternalLink size={14} />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="proposal-card navigation-patch-card">
+                    <div className="proposal-heading">
+                      <span><Scissors size={17} /></span>
+                      <div>
+                        <small>Choose a researched fix</small>
+                        <h3>Repair the Artists navigation</h3>
+                      </div>
+                    </div>
+
+                    <div className="fix-candidates">
+                      {navigationDiagnosis.candidates.map((candidate, index) => (
+                        <button
+                          className={
+                            navigationPatch.strategy === candidate.strategy
+                              ? "selected"
+                              : ""
+                          }
+                          key={candidate.strategy}
+                          onClick={() => setNavigationPatch(candidate)}
+                          disabled={phase === "waiting-for-approval"}
+                        >
+                          <span className="radio">
+                            {navigationPatch.strategy === candidate.strategy && (
+                              <span />
+                            )}
+                          </span>
+                          <span>
+                            <strong>
+                              {index === 0
+                                ? "Correct the route key"
+                                : "Add a defensive fallback"}
+                            </strong>
+                            <small>
+                              {index === 0
+                                ? "Recommended · fixes the underlying typo"
+                                : "Prevents the exception if the route is missing"}
+                            </small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <code className="patch-file">{navigationPatch.file}</code>
+                    <div className="code-diff">
+                      <code>- {navigationPatch.before}</code>
+                      <code>+ {navigationPatch.after}</code>
+                    </div>
+
+                    {isSpeaking && (
+                      <button
+                        className="accept-proposal-button"
+                        onClick={() =>
+                          requestNavigationApproval(navigationPatch)
+                        }
+                      >
+                        <Check size={16} />
+                        Review selected fix
+                      </button>
+                    )}
+
+                    {phase === "waiting-for-approval" && (
+                      <>
+                        <p className="approval-note">
+                          <ShieldCheck size={15} />
+                          The JavaScript remains unchanged until you approve.
+                        </p>
+                        <div className="approval-actions">
+                          <button
+                            className="approve-button"
+                            onClick={approveNavigationPatch}
+                          >
+                            <Check size={17} /> Approve selected fix
+                          </button>
+                          <button
+                            className="cancel-button"
+                            onClick={() => {
+                              setNavigationApprovalId(null);
+                              setPhase("diagnosis-ready");
+                              setIsSpeaking(true);
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {phase === "resolved" &&
+                (activeIncident === "navigation" || testResult) && (
                 <div className="resolved-card">
                   <CheckCircle2 size={25} />
                   <div>
                     <small>Repair verified</small>
                     <h3>Customer test passed</h3>
                     <p>
-                      <strong>Test booking successful.</strong>{" "}
-                      The same booking test now finds {testResult.availableSlotCount} appointments
-                      for{" "}
-                      {activeIncident === "code"
-                        ? "Dimensional color with Maya."
-                        : "Haircut with Sara."}
+                      {activeIncident === "navigation" ? (
+                        <>
+                          <strong>Artists navigation successful.</strong> The
+                          same click now resolves to the real /artists page.
+                        </>
+                      ) : (
+                        <>
+                          <strong>Test booking successful.</strong>{" "}
+                          The same booking test now finds{" "}
+                          {testResult?.availableSlotCount} appointments for{" "}
+                          {activeIncident === "code"
+                            ? "Dimensional color with Maya."
+                            : "Haircut with Sara."}
+                        </>
+                      )}
                     </p>
                     <button
                       className="book-test-button"
                       onClick={() => {
                         voice.disconnect();
-                        toggleOwnerMode();
-                        window.setTimeout(
-                          () =>
-                            document
-                              .getElementById("available-times")
-                              ?.scrollIntoView({ behavior: "smooth", block: "center" }),
-                          50,
-                        );
+                        if (activeIncident === "navigation") {
+                          handleArtistsClick();
+                        } else {
+                          toggleOwnerMode();
+                          window.setTimeout(
+                            () =>
+                              document
+                                .getElementById("available-times")
+                                ?.scrollIntoView({
+                                  behavior: "smooth",
+                                  block: "center",
+                                }),
+                            50,
+                          );
+                        }
                       }}
                     >
-                      Book a test appointment
+                      {activeIncident === "navigation"
+                        ? "Open Artists page"
+                        : "Book a test appointment"}
                     </button>
                   </div>
                 </div>
-              )}
+                )}
 
               {phase === "error" && (
                 <div className="error-card">

@@ -131,9 +131,9 @@ export function useJustAskVoice(options: VoiceOptions) {
       if (connectionAttemptRef.current !== attempt) return;
 
       const investigateTool = tool({
-        name: "run_registered_booking_test",
+        name: "run_registered_customer_test",
         description:
-          "Run the host application's registered customer booking test for the problem the owner reports. It supports Haircut with Sara and Dimensional color with Maya.",
+          "Run the host application's registered customer journey test for the problem the owner reports. It supports Haircut with Sara, Dimensional color with Maya, and the Artists menu exception.",
         parameters: z.object({
           ownerRequest: z.string().max(200),
         }),
@@ -158,11 +158,12 @@ export function useJustAskVoice(options: VoiceOptions) {
       const agent = new RealtimeAgent({
         name: "JustAsk Site Doctor",
         instructions: `You are a concise voice assistant for a nontechnical salon owner.
-You can only inspect the two registered booking journeys, explain their registered fixes, and revise the pending safe schedule.
+You can only inspect the registered customer journeys, explain their registered fixes, and revise the pending safe schedule.
 Never say a repair was applied until the app verifies it. Never request or repeat personal data, credentials, cookies, or payment details.
-When asked about either booking problem, call run_registered_booking_test and explain the exact structured result it returns.
+When asked about a registered problem, call run_registered_customer_test and explain the exact structured result it returns.
 For Sara's missing schedule, propose Monday through Friday, 09:00–17:00. If the owner asks you to propose a fix later, repeat this safe proposal and direct them to the visual options.
 For the Dimensional color problem, explain the registered 90-to-180-minute code patch and direct the owner to its visual approval card.
+For an Artists-link JavaScript exception, explain the exact TypeError, summarize the Exa sources and ask the owner to choose one of the visual JavaScript fixes.
 If interrupted with a Friday closure, immediately call remove_friday_from_pending_schedule.
 Never apply either fix yourself. Tell the owner to review and explicitly approve the exact visual change.
 Current allowlisted page context: ${JSON.stringify(context)}`,

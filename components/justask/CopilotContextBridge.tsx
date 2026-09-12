@@ -9,6 +9,7 @@ import type {
   AgentPhase,
   AvailabilityChange,
   CodePatch,
+  NavigationPatch,
   WebsiteContext,
 } from "@/lib/contracts";
 
@@ -17,6 +18,7 @@ interface BridgeProps {
   phase: AgentPhase;
   proposal: AvailabilityChange | null;
   codePatch: CodePatch | null;
+  navigationPatch: NavigationPatch | null;
 }
 
 function EnabledCopilotBridge({
@@ -24,6 +26,7 @@ function EnabledCopilotBridge({
   phase,
   proposal,
   codePatch,
+  navigationPatch,
 }: BridgeProps) {
   useAgentContext({
     description:
@@ -38,8 +41,11 @@ function EnabledCopilotBridge({
       phase,
       proposal,
       codePatch,
+      navigationPatch,
       explicitApprovalRequired:
-        (proposal !== null || codePatch !== null) &&
+        (proposal !== null ||
+          codePatch !== null ||
+          navigationPatch !== null) &&
         phase === "waiting-for-approval",
     },
   });
@@ -53,6 +59,20 @@ function EnabledCopilotBridge({
     }),
     handler: async () => ({
       shown: codePatch !== null,
+      applied: false,
+      instruction: "Wait for explicit approval in the JustAsk panel.",
+    }),
+  });
+
+  useFrontendTool({
+    name: "show_artists_navigation_fix_approval",
+    description:
+      "Surface the selected registered JavaScript fix for the Artists link. Never executes arbitrary code and never applies without owner approval.",
+    parameters: z.object({
+      patchType: z.literal("FIX_ARTISTS_ROUTE"),
+    }),
+    handler: async () => ({
+      shown: navigationPatch !== null,
       applied: false,
       instruction: "Wait for explicit approval in the JustAsk panel.",
     }),
