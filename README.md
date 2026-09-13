@@ -61,8 +61,9 @@ npm run build
 All supported values are documented in `.env.example`.
 
 - `DEMO_MODE=true` keeps the deterministic diagnosis, repair, and fallback research path available.
-- `OPENAI_API_KEY` enables live voice. It is used only by the server route that mints a short-lived client secret.
-- `OPENAI_LIVE_MODEL` defaults to the currently supported `gpt-realtime-2.1`. Set it to another Realtime model only if it is enabled for your OpenAI project.
+- `OPENAI_API_KEY` enables live voice. It is used only by the server route that creates the GPT-Live session.
+- `OPENAI_LIVE_MODEL` defaults to `gpt-live-1`.
+- `OPENAI_REASONING_MODEL` selects the Responses-delegation backend and defaults to `gpt-5.6-terra`.
 - `EXA_API_KEY` enables live trusted-domain research. Without it, the same official Cal.com sources are returned from the bundled fallback.
 - `NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL` enables the optional CopilotKit v2 bridge. Without it, the local adapter preserves the same context and approval interfaces.
 
@@ -76,8 +77,8 @@ No permanent secret belongs in a `NEXT_PUBLIC_` variable.
 - `lib/booking-tools.ts` implements slot generation, the registered customer test, deterministic diagnosis, and allowlisted schedule mutation.
 - `lib/code-tools.ts` implements the second registered code diagnosis, exact patch validation, and repeat customer test.
 - `lib/navigation-tools.ts` implements the Artists-link exception, two validated JavaScript patch candidates, approval, and route verification.
-- `app/api/live/session/route.ts` creates OpenAI Realtime ephemeral client secrets server-side.
-- `lib/use-justask-voice.ts` uses the official OpenAI Agents SDK browser WebRTC transport, local typed tools, and automatic interruption handling.
+- `app/api/live/session/route.ts` exchanges a browser SDP offer for a server-configured GPT-Live WebRTC session.
+- `lib/use-justask-voice.ts` manages the GPT-Live WebRTC media track, event channel, and delegated tool results.
 - `app/api/research/route.ts` calls Exa server-side with a Cal.com domain allowlist and a short timeout.
 - `components/justask/CopilotContextBridge.tsx` publishes page context, workflow state, and the exact pending diff through CopilotKit v2 when a runtime is configured.
 
@@ -87,7 +88,7 @@ The local state layer intentionally mirrors a future platform adapter. A WordPre
 
 ### OpenAI GPT-Live-1
 
-The browser preloads a short-lived `ek_` client secret when the owner approaches the JustAsk control; the permanent OpenAI key never reaches client code. On click it connects with `RealtimeAgent` and `RealtimeSession` from `@openai/agents/realtime`, which use WebRTC and support speech interruption. Closing Owner Mode interrupts, mutes, closes, and removes live audio. Typed input remains available if credentials, microphone access, or the network fails.
+On click, the browser creates a WebRTC offer and sends it with allowlisted page context to the server. The server creates a `gpt-live-1` session through `/v1/live/sessions`, configured with Responses delegation for the registered tools, and returns only the SDP answer. The permanent OpenAI key never reaches client code. Closing Owner Mode closes the session and removes live audio. Typed input remains available if credentials, microphone access, or the network fails.
 
 ### Exa
 
@@ -109,7 +110,7 @@ The v2 bridge uses application context and frontend-tool interfaces while keepin
 ## Known limitations
 
 - Salon data is in browser memory and resets on refresh; this is intentional for the hackathon demo.
-- The real voice path requires an OpenAI project with access to the configured Realtime model.
+- The real voice path requires an OpenAI project with access to GPT-Live and the configured Responses model.
 - The deterministic UI, rather than a remote CopilotKit runtime, is authoritative for approvals so the no-credential path cannot be blocked.
 - Times are demonstration UTC slots rather than a production timezone-aware booking calendar.
 - There is no authentication, persistence, payment flow, arbitrary-site crawling, or WordPress plugin.

@@ -1,8 +1,6 @@
 "use client";
 
-import { RealtimeAgent, RealtimeSession, tool } from "@openai/agents/realtime";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { z } from "zod";
 import type { WebsiteContext } from "@/lib/contracts";
 
 export type VoiceConnectionState =
@@ -18,20 +16,36 @@ interface VoiceOptions {
   onInterrupted: () => void;
 }
 
-interface ClientToken {
-  clientSecret: string;
-  model: string;
-  contextKey: string;
-  createdAt: number;
+interface LiveSessionResponse {
+  session?: { id?: string };
+  transport?: { type?: string; sdp?: string };
+  error?: string;
+}
+
+interface FunctionCallItem {
+  type?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
+}
+
+interface LiveServerEvent {
+  type?: string;
+  error?: { message?: string };
+  event?: {
+    type?: string;
+    item?: FunctionCallItem;
+  };
 }
 
 export function useJustAskVoice(options: VoiceOptions) {
   const [connectionState, setConnectionState] =
     useState<VoiceConnectionState>("disconnected");
   const [error, setError] = useState<string | null>(null);
-  const sessionRef = useRef<RealtimeSession | null>(null);
-  const tokenRef = useRef<ClientToken | null>(null);
-  const tokenRequestRef = useRef<Promise<ClientToken> | null>(null);
+  const peerRef = useRef<RTCPeerConnection | null>(null);
+  const channelRef = useRef<RTCDataChannel | null>(null);
+  const microphoneRef = useRef<MediaStream | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const connectionAttemptRef = useRef(0);
   const optionsRef = useRef(options);
 
@@ -39,86 +53,39 @@ export function useJustAskVoice(options: VoiceOptions) {
     optionsRef.current = options;
   }, [options]);
 
+  const releaseTransport = useCallback(() => {
+    microphoneRef.current?.getTracks().forEach((track) => track.stop());
+    microphoneRef.current = null;
+    channelRef.current?.close();
+    channelRef.current = null;
+    peerRef.current?.close();
+    peerRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.srcObject = null;
+      audioRef.current = null;
+    }
+  }, []);
+
   const disconnect = useCallback(() => {
     connectionAttemptRef.current += 1;
-    const session = sessionRef.current;
-    if (session) {
-      try {
-        session.interrupt();
-        session.mute(true);
-      } catch {
-        // A transport can close between the checks above.
-      }
-      session.close();
+    const channel = channelRef.current;
+    if (channel?.readyState === "open") {
+      channel.send(JSON.stringify({ type: "session.close" }));
     }
-    sessionRef.current = null;
-    tokenRef.current = null;
-    if (typeof document !== "undefined") {
-      document.querySelectorAll("audio").forEach((audio) => {
-        audio.pause();
-        audio.srcObject = null;
-      });
-    }
+    releaseTransport();
     setConnectionState("disconnected");
-  }, []);
+  }, [releaseTransport]);
 
   useEffect(() => disconnect, [disconnect]);
 
-  const getClientToken = useCallback(async (): Promise<ClientToken> => {
-    const context = optionsRef.current.getContext();
-    const contextKey = JSON.stringify(context);
-    const cached = tokenRef.current;
-    if (
-      cached &&
-      cached.contextKey === contextKey &&
-      Date.now() - cached.createdAt < 30_000
-    ) {
-      return cached;
-    }
-    if (tokenRequestRef.current) return tokenRequestRef.current;
-
-    const request = (async () => {
-      const tokenResponse = await fetch("/api/live/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context }),
-      });
-      const token = (await tokenResponse.json()) as {
-        clientSecret?: string;
-        model?: string;
-        error?: string;
-      };
-      if (!tokenResponse.ok || !token.clientSecret || !token.model) {
-        throw new Error(token.error ?? "Live voice could not start.");
-      }
-      const cachedToken: ClientToken = {
-        clientSecret: token.clientSecret,
-        model: token.model,
-        contextKey,
-        createdAt: Date.now(),
-      };
-      tokenRef.current = cachedToken;
-      return cachedToken;
-    })();
-    tokenRequestRef.current = request;
-    try {
-      return await request;
-    } finally {
-      tokenRequestRef.current = null;
-    }
+  const preload = useCallback(async () => {
+    // GPT-Live session creation requires a browser SDP offer, so it begins
+    // only after the user grants microphone access.
   }, []);
 
-  const preload = useCallback(async () => {
-    if (sessionRef.current) return;
-    try {
-      await getClientToken();
-    } catch {
-      // connect() surfaces errors; speculative preload stays silent.
-    }
-  }, [getClientToken]);
-
   const connect = useCallback(async () => {
-    if (sessionRef.current) return;
+    if (peerRef.current) return;
     const attempt = connectionAttemptRef.current + 1;
     connectionAttemptRef.current = attempt;
     setConnectionState("connecting");
@@ -126,70 +93,176 @@ export function useJustAskVoice(options: VoiceOptions) {
 
     try {
       const context = optionsRef.current.getContext();
-      const token = await getClientToken();
-      tokenRef.current = null;
+      const peer = new RTCPeerConnection();
+      peerRef.current = peer;
+
+      const audio = new Audio();
+      audio.autoplay = true;
+      audioRef.current = audio;
+      peer.addEventListener("track", (event) => {
+        audio.srcObject =
+          event.streams[0] ?? new MediaStream([event.track]);
+        void audio.play().catch(() => {
+          setError("Live voice connected, but the browser blocked audio playback.");
+        });
+      });
+
+      const microphone = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      microphoneRef.current = microphone;
+      microphone.getAudioTracks().forEach((track) => {
+        peer.addTrack(track, microphone);
+      });
+
+      const channel = peer.createDataChannel("oai-events");
+      channelRef.current = channel;
+      let startedResolve: (() => void) | undefined;
+      let startedReject: ((reason: Error) => void) | undefined;
+      const started = new Promise<void>((resolve, reject) => {
+        startedResolve = resolve;
+        startedReject = reject;
+      });
+
+      const send = (event: object) => {
+        if (channel.readyState !== "open") {
+          throw new Error("The GPT-Live event channel is not open.");
+        }
+        channel.send(JSON.stringify(event));
+      };
+
+      const handleFunctionCall = async (
+        item: FunctionCallItem,
+      ): Promise<void> => {
+        if (!item.call_id || !item.name) return;
+        let output: string;
+        try {
+          const args = JSON.parse(item.arguments ?? "{}") as Record<
+            string,
+            unknown
+          >;
+          if (item.name === "run_registered_customer_test") {
+            output = await optionsRef.current.onInvestigate(
+              String(args.ownerRequest ?? ""),
+            );
+          } else if (item.name === "remove_friday_from_pending_schedule") {
+            await optionsRef.current.onFridayCorrection(
+              String(args.ownerCorrection ?? ""),
+            );
+            output =
+              "Friday was removed. The owner must use the visual approval control before anything changes.";
+          } else {
+            output = JSON.stringify({ error: `Unknown tool: ${item.name}` });
+          }
+        } catch (cause) {
+          output = JSON.stringify({
+            error:
+              cause instanceof Error ? cause.message : "Tool execution failed.",
+          });
+        }
+
+        send({
+          type: "response.item.create",
+          event_id: crypto.randomUUID(),
+          item: {
+            type: "function_call_output",
+            call_id: item.call_id,
+            output,
+          },
+        });
+        send({ type: "response.create", event_id: crypto.randomUUID() });
+      };
+
+      channel.addEventListener("message", ({ data }) => {
+        let event: LiveServerEvent;
+        try {
+          event = JSON.parse(String(data)) as LiveServerEvent;
+        } catch {
+          return;
+        }
+        if (event.type === "session.started") {
+          startedResolve?.();
+        } else if (event.type === "session.closed") {
+          releaseTransport();
+          setConnectionState("disconnected");
+        } else if (event.type === "error") {
+          const message = event.error?.message ?? "GPT-Live session error.";
+          console.error("[live] Session error:", event);
+          startedReject?.(new Error(message));
+          setError(message);
+          setConnectionState("error");
+        } else if (
+          event.type === "response.event" &&
+          event.event?.type === "response.output_item.done" &&
+          event.event.item?.type === "function_call"
+        ) {
+          void handleFunctionCall(event.event.item);
+        } else if (event.type === "session.input_transcript.delta") {
+          optionsRef.current.onInterrupted();
+        }
+      });
+      channel.addEventListener("close", () => {
+        if (connectionAttemptRef.current === attempt) {
+          releaseTransport();
+          setConnectionState("disconnected");
+        }
+      });
+
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      if (peer.iceGatheringState !== "complete") {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(() => {
+            peer.removeEventListener("icegatheringstatechange", onState);
+            reject(new Error("Timed out while gathering ICE candidates."));
+          }, 10_000);
+          function onState() {
+            if (peer.iceGatheringState !== "complete") return;
+            window.clearTimeout(timeout);
+            peer.removeEventListener("icegatheringstatechange", onState);
+            resolve();
+          }
+          peer.addEventListener("icegatheringstatechange", onState);
+        });
+      }
+
+      const sdp = peer.localDescription?.sdp;
+      if (!sdp) throw new Error("The browser did not create an SDP offer.");
+      const sessionResponse = await fetch("/api/live/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context, sdp }),
+      });
+      const session = (await sessionResponse.json()) as LiveSessionResponse;
+      if (!sessionResponse.ok || !session.transport?.sdp) {
+        throw new Error(session.error ?? "OpenAI Live could not start.");
+      }
+      await peer.setRemoteDescription({
+        type: "answer",
+        sdp: session.transport.sdp,
+      });
+      await Promise.race([
+        started,
+        new Promise<never>((_, reject) =>
+          window.setTimeout(
+            () => reject(new Error("GPT-Live did not finish connecting.")),
+            10_000,
+          ),
+        ),
+      ]);
       if (connectionAttemptRef.current !== attempt) return;
 
-      const investigateTool = tool({
-        name: "run_registered_customer_test",
-        description:
-          "Run the host application's registered customer journey test for the problem the owner reports. It supports Haircut with Sara, Dimensional color with Maya, and the Artists menu exception.",
-        parameters: z.object({
-          ownerRequest: z.string().max(200),
-        }),
-        execute: async ({ ownerRequest }) => {
-          return optionsRef.current.onInvestigate(ownerRequest);
-        },
-      });
-
-      const fridayCorrectionTool = tool({
-        name: "remove_friday_from_pending_schedule",
-        description:
-          "Revise the pending availability proposal when the owner says the salon is closed Friday. This creates an approval request but does not apply it.",
-        parameters: z.object({
-          ownerCorrection: z.string().max(200),
-        }),
-        execute: async ({ ownerCorrection }) => {
-          await optionsRef.current.onFridayCorrection(ownerCorrection);
-          return "Friday was removed. The owner must use the visual approval control before anything changes.";
-        },
-      });
-
-      const agent = new RealtimeAgent({
-        name: "JustAsk Site Doctor",
-        instructions: `You are a concise voice assistant for a nontechnical salon owner.
-You can only inspect the registered customer journeys, explain their registered fixes, and revise the pending safe schedule.
-Never say a repair was applied until the app verifies it. Never request or repeat personal data, credentials, cookies, or payment details.
-When asked about a registered problem, call run_registered_customer_test and explain the exact structured result it returns.
-For Sara's missing schedule, propose Monday through Friday, 09:00–17:00. If the owner asks you to propose a fix later, repeat this safe proposal and direct them to the visual options.
-For the Dimensional color problem, explain the registered 90-to-180-minute code patch and direct the owner to its visual approval card.
-For an Artists-link JavaScript exception, explain the exact TypeError, summarize the Exa sources and ask the owner to choose one of the visual JavaScript fixes.
-If interrupted with a Friday closure, immediately call remove_friday_from_pending_schedule.
-Never apply either fix yourself. Tell the owner to review and explicitly approve the exact visual change.
-Current allowlisted page context: ${JSON.stringify(context)}`,
-        tools: [investigateTool, fridayCorrectionTool],
-      });
-      const session = new RealtimeSession(agent, { model: token.model });
-      session.on("audio_interrupted", () => {
-        optionsRef.current.onInterrupted();
-      });
-      session.on("error", (voiceError) => {
-        console.error("[live] Realtime session error:", voiceError);
-        setError("Live voice had a problem. You can continue with typed input.");
-        setConnectionState("error");
-      });
-      await session.connect({ apiKey: token.clientSecret });
-      if (connectionAttemptRef.current !== attempt) {
-        session.close();
-        return;
-      }
-      sessionRef.current = session;
       setConnectionState("connected");
-      session.sendMessage(
-        "Greet the salon owner now. Say only: Hi, I’m JustAsk. How can I help you?",
-      );
+      send({
+        type: "session.instructions.append",
+        event_id: crypto.randomUUID(),
+        delegation_id: null,
+        content:
+          "Greet immediately without waiting for the owner. Say: Hi, I’m JustAsk. How can I help you? Then pause and listen.",
+      });
     } catch (cause) {
       if (connectionAttemptRef.current !== attempt) return;
+      releaseTransport();
       setError(
         cause instanceof Error
           ? cause.message
@@ -197,11 +270,12 @@ Current allowlisted page context: ${JSON.stringify(context)}`,
       );
       setConnectionState("error");
     }
-  }, [getClientToken]);
+  }, [releaseTransport]);
 
   const sendText = useCallback((text: string) => {
-    if (!sessionRef.current) return false;
-    sessionRef.current.sendMessage(text);
+    // Typed input follows the app's existing deterministic workflow. GPT-Live
+    // receives user turns from its negotiated audio track.
+    void text;
     return true;
   }, []);
 
